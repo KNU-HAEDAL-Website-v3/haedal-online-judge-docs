@@ -1,0 +1,16 @@
+name: "❓ 질문"
+description: "프로젝트에 대해 무엇이든 물어보세요"
+labels: ["question"]
+body:
+  - type: textarea
+    id: q
+    attributes:
+      label: 궁금한 점
+      description: 편하게 적어주세요. "이런 것도 물어봐도 되나?" 싶은 질문일수록 환영합니다.
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: 시도해본 것 (선택)
+      description: 이미 찾아보거나 해본 게 있다면 적어주세요. 답변이 더 정확해집니다.

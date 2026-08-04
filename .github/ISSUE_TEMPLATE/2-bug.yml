@@ -1,0 +1,37 @@
+name: "🐛 버그 신고"
+description: "동작이 이상하거나 오류가 발생했을 때"
+title: "[버그] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 무슨 일이 일어났나요?
+      description: 발생한 문제를 설명해주세요. 스크린샷이 있으면 함께 올려주세요.
+      placeholder: 예) 과제 제출 버튼을 누르면 오류 페이지가 뜹니다.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 재현 방법
+      description: 어떤 순서로 하면 이 문제가 다시 발생하나요?
+      placeholder: |
+        1. 로그인한다
+        2. 과제 페이지로 이동한다
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대한 동작
+      placeholder: 예) 제출 완료 메시지가 떠야 합니다.
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: 환경 (선택)
+      description: 브라우저, OS 등. 모르면 비워두세요.
+      placeholder: 예) Chrome 126 / Windows 11

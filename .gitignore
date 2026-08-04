@@ -1,0 +1,40 @@
+# === 시크릿 (절대 커밋 금지) ===
+application-secret.yml
+application-secret.yaml
+application-*.properties
+!application.properties
+*.env
+.env*
+*.pem
+*.key
+
+# === Java / Gradle (backend) ===
+backend/build/
+backend/.gradle/
+backend/out/
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# === Node (frontend) ===
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.cache/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# === IDE ===
+.idea/
+*.iml
+.vscode/
+!.vscode/extensions.json
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === 로그 ===
+*.log
+logs/

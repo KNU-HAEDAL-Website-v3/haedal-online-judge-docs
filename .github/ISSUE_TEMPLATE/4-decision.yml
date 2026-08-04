@@ -1,0 +1,33 @@
+name: "🧭 결정"
+description: "프로젝트의 방향·기술·범위에 대한 결정이 필요할 때"
+title: "[결정] "
+labels: ["decision"]
+body:
+  - type: textarea
+    id: background
+    attributes:
+      label: 배경
+      description: 왜 이 결정이 필요한가요? 지금 무슨 문제가 있나요?
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: 선택지
+      description: 각 선택지와 장단점을 적어주세요.
+      value: |
+        | 선택지 | 장점 | 단점 |
+        |--------|------|------|
+        | A. | | |
+        | B. | | |
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 제안 (선택)
+      description: 제안자의 의견과 이유. 없으면 비워두세요.
+  - type: markdown
+    attributes:
+      value: |
+        > 결정이 나면 결과와 이유를 댓글로 남기고, `docs/decisions/`에 파일로 옮겨 기록합니다.

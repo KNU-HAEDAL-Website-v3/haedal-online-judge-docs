@@ -1,0 +1,33 @@
+name: "🔨 작업"
+description: "기능 추가, 개선 등 개발 작업"
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 무엇을 하나요?
+      description: 한 줄로 요약해주세요.
+      placeholder: 예) 과제 제출 API를 추가합니다.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: 왜 필요한가요?
+      description: 배경을 적어주세요. 관련 회의록·결정 문서가 있으면 링크해주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: 완료 조건
+      description: 아래 항목이 모두 체크되면 이슈를 닫습니다.
+      value: |
+        - [ ] 
+        - [ ] 
+    validations:
+      required: true
+  - type: textarea
+    id: ref
+    attributes:
+      label: 참고 (선택)
+      description: 관련 문서, 링크, 스크린샷
