@@ -50,7 +50,7 @@
 
 ### User 보강
 - `UserService.findOrCreateMember(loginId)` 추출 → `StubAuthService`와 `EnrollmentService`가 공용. (아직 로그인 안 한 부원도 loginId로 배정 가능해야 함. 이름은 loginId로 임시, 홈페이지 연동 시 갱신.) `StubAuthService`는 UserRepository 대신 UserService만 주입. loginId는 1~50자(`users.login_id varchar(50)`) — 요청 DTO는 `@Size(max=50)`, 경로 변수로 들어오는 loginId는 `findOrCreateMember`가 한 번 더 막는다(400).
-- 기존 `auth/dto/UserResponse` → `user/dto/UserResponse`로 이동. 사용자 요약은 항상 이 모양 하나만 쓴다.
+- 기존 `auth/dto/UserResponse` → `user/dto/UserResponse`로 이동(본인 정보·명부용, loginId·globalRole 포함). 타인에게 공개 가능한 최소 정보는 `user/dto/UserSummary {id, name}` — 학생 화면의 운영진 목록이 이걸 쓴다.
 
 ## 2. 권한 판정 공통 컴포넌트 — `auth/authorization/`
 
@@ -130,8 +130,8 @@ boolean canManage(User user, Cohort cohort, EnrollmentRole myRoleOrNull) // 응�
 다음 슬라이스: `POST /api/cohorts/{cohortId}/students {loginIds: []}` (명단 붙여넣기, @CohortRole(OPERATOR)), `DELETE .../students/{loginId}`. 이미 OPERATOR인 loginId가 섞이면 → 409 CONFLICT (역할을 바꾸지 않는다).
 
 ### DTO (record)
-- `CohortResponse {id, name, description, status, createdAt, operators: [UserResponse], studentCount: Integer|null, myRole: OPERATOR|STUDENT|null, canManage: boolean}` — 목록·단건·생성·수정 응답 **전부 이 하나**.
-  - `operators`: 운영진 이름은 학생에게도 공개 (질문할 상대를 알아야 함). 학생이 볼 수 있는 유일한 타인 정보.
+- `CohortResponse {id, name, description, status, createdAt, operators: [UserSummary{id, name}], studentCount: Integer|null, myRole: OPERATOR|STUDENT|null, canManage: boolean}` — 목록·단건·생성·수정 응답 **전부 이 하나**.
+  - `operators`: **이름(+id)만.** 학생이 볼 수 있는 유일한 타인 정보이므로 loginId·globalRole 은 싣지 않는다. FE: 운영진 이름은 다른 색으로 표시, 클릭하면 작은 팝업에 이름 + 직책("교육 운영진"). 직책 필드는 없음 — 이 목록의 사람은 전부 이 분반 OPERATOR 다. (PM 결정 2026-08-17)
   - `studentCount`: **요청자가 OPERATOR/ADMIN일 때만 값, STUDENT면 null.**
   - `myRole`: 요청자의 Enrollment 역할(비소속 ADMIN만 null). `canManage`: §2 정의. 두 필드는 `@Schema(description)`으로 판정 규칙을 OpenAPI에 명시.
 - `MemberResponse {user: UserResponse, role, enrolledAt}`
@@ -142,6 +142,7 @@ boolean canManage(User user, Cohort cohort, EnrollmentRole myRoleOrNull) // 응�
 ### FE 화면 계약 메모
 - **학생 홈**: `GET /api/me/cohorts` 결과를 status로 나눠 "현재 소속(ACTIVE)" / "지난 소속(ARCHIVED)" 두 섹션. 각 섹션은 꺾쇠로 접고 펼침, 현재 소속이 위. 펼쳤는데 비어 있으면 아무것도 표시하지 않는다(별도 미소속 안내 문구 없음).
 - **관리자 분반 관리**: `GET /api/cohorts`(기본 ACTIVE)와 `?status=ARCHIVED`로 "진행 중" / "보관" 두 섹션. 학생 홈과 같은 꺾쇠 패턴.
+- 학생 화면의 운영진 이름은 다른 색으로 표시, 클릭하면 작은 팝업에 이름 + 직책("교육 운영진"). 그 이상의 정보(loginId 등)는 API가 내려주지 않는다.
 - 학생 화면에서 운영 기능 진입 버튼은 `canManage`로만 분기. ADMIN 전용 액션(수정·보관·운영진 지정)은 관리자 화면 소관 — `/api/auth/me`의 `globalRole`로 판단.
 
 ## 4. 정한 규약 — 이후 슬라이스가 그대로 따른다
@@ -239,7 +240,8 @@ README.md: 스택 표 갱신, swagger 안내
 12. **관리자 목록 기본 ACTIVE**, 보관은 `?status=ARCHIVED`로 별도 섹션. (PM 결정 2026-08-17)
 13. 목록 페이징 없음. 시더 확장(local 전용).
 14. **권한 어노테이션은 위치 우선 단일 유효** — 메서드 > 클래스, 한 위치에 둘 이상 금지(기동 실패). 우리 컨트롤러는 `/api/` 아래에만(기동 검증). 종류별 OR 판정은 클래스 `@LoginOnly`가 메서드 `@AdminOnly`를 덮는 fail-open이라 기각. (구현 리뷰 2026-08-17)
-15. 세션 쿠키 `SameSite=Lax`(CSRF 1차 방어), CSRF 토큰은 P1 미도입. 학생에게 내려가는 `operators`는 `UserResponse` 전체(id·loginId·name·globalRole) — loginId가 개인정보가 되는 시점(홈페이지 연동)에 `{id, name}`으로 좁힐지 재검토.
+15. 세션 쿠키 `SameSite=Lax`(CSRF 1차 방어), CSRF 토큰은 P1 미도입.
+16. **학생에게 내려가는 운영진은 `UserSummary {id, name}`** — 학생이 운영진의 loginId·전역 역할을 알 필요가 없고 보안상도 그렇다(PM, 2026-08-17). FE는 이름을 다른 색으로, 클릭 시 팝업(이름 + "교육 운영진").
 
 ## 9. 후속 작업
 
