@@ -1,6 +1,6 @@
 # Cohort(분반) 수직 슬라이스 설계
 
-> 상태: 확정 (2026-08-17) · 구현 레포: [haedal-online-judge-BE](https://github.com/KNU-HAEDAL-Website-v3/haedal-online-judge-BE)
+> 상태: 확정 (2026-08-17) · 구현 완료 (BE `feat/cohort-slice`, 2026-08-17 — 구현 리뷰 반영분으로 §1·§2·§3·§6·§7 갱신) · 구현 레포: [haedal-online-judge-BE](https://github.com/KNU-HAEDAL-Website-v3/haedal-online-judge-BE)
 > 기준 문서: [mvp-scope.md](../mvp-scope.md) · [permissions.md](../permissions.md) · [flows-and-usecases.md](../flows-and-usecases.md) · [decisions/3](../decisions/3-권한-모델-2층-구조.md) · [decisions/5](../decisions/5-세션-인증-채택-spring-security-보류.md) · BE `CLAUDE.md`
 > 검증 기준 버전: Spring Boot 4.1.0 / Spring Framework 7.0 / springdoc 3.1.0 / Testcontainers 2.0.5
 
@@ -46,10 +46,10 @@
 - **unique (cohort_id, user_id)** — 한 사람은 한 분반에서 역할 하나.
 - `Enrollment.create(cohort, user, role)`, `promoteToOperator()`. `EnrollmentRole.satisfies(required)`: OPERATOR ⊇ STUDENT.
 - Enrollment은 **하드 삭제되는 관계 테이블이며 다른 엔티티의 FK 대상이 아니다.** Submission은 (assignment_id, user_id)로 사용자를 직접 참조하고, 대시보드의 행은 현재 Enrollment(STUDENT)에서 만든다.
-- Repository: `findByCohortIdAndUserId`, `findAllByUserId`(fetch join cohort, ORDER BY cohort.status ASC, cohort.createdAt DESC), `findAllByCohortId`(fetch join user), `findAllByCohortIdIn`(fetch join user — 목록 응답 조립용 1회 쿼리).
+- Repository: `findByCohortIdAndUserId`(권한 판정용, 연관 안 건드림), `findAllByUserIdWithCohort`(fetch join cohort), `findAllByCohortIdWithUser`(fetch join user, 운영진 먼저·등록순), `findAllByCohortIdInWithUser`(fetch join user — 목록 응답 조립용 1회 쿼리). fetch join 조회는 이름 끝에 `WithXxx` + 반드시 `@Query`. `/me/cohorts` 정렬(ACTIVE 먼저 → 최신순)은 서비스에서 `Comparator.comparing(Cohort::isArchived).thenComparing(createdAt desc)`.
 
 ### User 보강
-- `UserService.findOrCreateMember(loginId)` 추출 → `StubAuthService`와 `EnrollmentService`가 공용. (아직 로그인 안 한 부원도 loginId로 배정 가능해야 함. 이름은 loginId로 임시, 홈페이지 연동 시 갱신.) `StubAuthService`는 UserRepository 대신 UserService만 주입.
+- `UserService.findOrCreateMember(loginId)` 추출 → `StubAuthService`와 `EnrollmentService`가 공용. (아직 로그인 안 한 부원도 loginId로 배정 가능해야 함. 이름은 loginId로 임시, 홈페이지 연동 시 갱신.) `StubAuthService`는 UserRepository 대신 UserService만 주입. loginId는 1~50자(`users.login_id varchar(50)`) — 요청 DTO는 `@Size(max=50)`, 경로 변수로 들어오는 loginId는 `findOrCreateMember`가 한 번 더 막는다(400).
 - 기존 `auth/dto/UserResponse` → `user/dto/UserResponse`로 이동. 사용자 요약은 항상 이 모양 하나만 쓴다.
 
 ## 2. 권한 판정 공통 컴포넌트 — `auth/authorization/`
@@ -65,30 +65,34 @@ permissions.md §2의 4단계를 **어노테이션 + 인터셉터**로 구현. A
 ```
 공개 경로(`/api/auth/login`, `/api/auth/logout`, `/api/health`)는 `AuthPaths.PUBLIC` 상수 하나에 모으고, WebConfig의 `excludePathPatterns`와 아래 검증기가 이 상수를 공유한다.
 
+**유효 어노테이션은 하나 (`AuthorizationAnnotations.resolve`)** — 메서드에 있으면 메서드 것, 없으면 클래스 것(위치 우선). 클래스 `@LoginOnly` + 메서드 `@AdminOnly`면 AdminOnly. 한 위치에 둘 이상 달면 기동 실패. 종류별로 따로 찾아 "LoginOnly가 있으면 통과" 식으로 판정하면 클래스 LoginOnly가 메서드 AdminOnly를 덮어 권한이 새므로, 인터셉터와 검증기가 같은 규칙 하나를 쓴다.
+
 ### `AuthorizationInterceptor.preHandle`
-1. CORS preflight → 통과. `handler`가 `HandlerMethod`가 아니면(정적/에러) → 통과.
-2. 어노테이션 조회 (`AnnotatedElementUtils.findMergedAnnotation`, 메서드 → 클래스 순). **없으면 `IllegalStateException`(500)** — 기동 검증을 못 거친 컨텍스트에서도 fail-closed.
+1. CORS preflight와 일반 OPTIONS(Spring의 투명 처리, Allow 헤더만 응답) → 통과. `handler`가 `HandlerMethod`가 아니면(정적/에러) → 통과.
+2. 유효 어노테이션 하나를 고른다 (`AuthorizationAnnotations.resolve`). **없거나 한 위치에 둘 이상이면 `IllegalStateException`(500)** — 기동 검증을 못 거친 컨텍스트에서도 fail-closed.
 3. `@CohortRole`이면 URI 템플릿 변수 `cohortId`를 **ADMIN 판정보다 먼저** 읽는다 (`HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE`). 없으면 설정 오류 → 500. `Long.parseLong` 실패 → `InvalidInputException` → 400 `INVALID_INPUT` (인터셉터가 `@PathVariable` 바인딩보다 먼저 돌므로 여기서 직접 처리).
 4. 세션 userId로 User 로드 (없으면 401).
 5. `@LoginOnly` → 통과. `@AdminOnly` → `user.isAdmin()` 아니면 403.
-6. `@CohortRole(required)` → `CohortAuthorizer.resolve(user, cohortId)`가 준 `enrollmentRole`이 null이거나 `satisfies(required)`가 아니면 403. ADMIN은 resolve 안에서 통과.
+6. `@CohortRole(required)` → `CohortAuthorizer.isAllowed(user, cohortId, required)`가 false면 403 (ADMIN은 안에서 통과).
 
 인터셉터는 **Cohort를 로드하지 않고 HTTP 메서드를 보지 않는다** — 4단계 판정만. 보관 여부는 도메인 규칙(§1)이지 권한이 아니다. request attribute로 User를 넘기는 최적화는 하지 않는다 (`@LoginUser` 리졸버는 현행대로 재조회).
 
 ### `CohortAuthorizer` — 판정 규칙의 단일 출처
 ```java
-record CohortAccess(EnrollmentRole enrollmentRole /*nullable*/, boolean canManage) {}
-CohortAccess resolve(User user, Long cohortId)   // 인터셉터와 응답 DTO 조립(canManage) 둘 다 이걸 쓴다
+Optional<EnrollmentRole> roleOf(User user, Long cohortId)              // 소속 역할. 비소속(ADMIN 포함)이면 empty
+boolean isAllowed(User user, Long cohortId, EnrollmentRole required)   // 인터셉터가 씀: ADMIN || roleOf.satisfies(required)
+boolean canManage(User user, Cohort cohort, EnrollmentRole myRoleOrNull) // 응답 조립이 씀: cohort ACTIVE && (ADMIN || OPERATOR)
 ```
-- `enrollmentRole`: Enrollment 있으면 그 role, 없으면 null (ADMIN도 비소속이면 null).
-- `canManage = cohort.status == ACTIVE && (user.isAdmin() || enrollmentRole == OPERATOR)` — FE의 "운영 기능 진입 버튼" 판정값. 규칙이 서버 한 곳에만 있게 한다.
-- 인터셉터의 통과 조건: `user.isAdmin() || (enrollmentRole != null && enrollmentRole.satisfies(required))`.
+- 인터셉터는 Cohort를 로드하지 않으므로(순수 4단계) `canManage`는 이미 로드된 Cohort를 받는 별도 메서드다. 두 규칙 모두 이 클래스에만 있다 — 어느 쪽을 바꿔도 여기만 고친다.
+- `canManage`는 FE의 "운영 기능 진입 버튼" 판정값.
 
 ### `AuthorizationMappingValidator` — 기동 시 검증 (`SmartInitializingSingleton`)
 `RequestMappingHandlerMapping.getHandlerMethods()`를 순회해 `/api/**` 핸들러에 대해:
 - (a) `AuthPaths.PUBLIC`이 아닌데 3종 어노테이션이 없다 → 실패
 - (b) `@CohortRole`인데 경로 패턴에 `{cohortId}`가 없다 → 실패
-- (c) 경로에 `{cohortId}`가 있는데 `@CohortRole`도 `@AdminOnly`도 아니다 → 실패
+- (c) 경로에 `{cohortId}`가 있는데 유효 어노테이션이 `@CohortRole`도 `@AdminOnly`도 아니다 → 실패
+- (d) 한 위치(메서드 또는 클래스)에 3종 중 둘 이상 → 실패
+- (e) 우리 패키지(`kr.haedal.hoj`)의 컨트롤러가 `/api/` 밖에 매핑되어 있다 → 실패 (prefix 오타로 인터셉터 2개를 통째로 비껴가는 것을 막는다)
 위반 목록을 모아 `IllegalStateException` → 부팅 중단. "어노테이션 붙이는 걸 잊는" 실수가 컴파일 다음 단계에서 잡힌다.
 
 ### 인터셉터가 보장하는 것 / 보장하지 않는 것
@@ -104,8 +108,9 @@ CohortAccess resolve(User user, Long cohortId)   // 인터셉터와 응답 DTO �
 |---|---|---|---|
 | UNAUTHENTICATED | 401 | 기존 | 재로그인 유도 + 작성 내용 보존 |
 | FORBIDDEN | 403 | 기존 | **홈 리다이렉트는 이 코드에만** |
-| INVALID_INPUT | 400 | 기존 + path 변수 파싱 실패 | 입력 오류 표시 |
-| NOT_FOUND | 404 | 신규. `NotFoundException(message)` — 자원별 한국어 문구를 인자로. 하위 리소스 소속 불일치도 404(존재 비노출) | "찾을 수 없음" 안내 페이지 (홈으로 보내지 않음) |
+| INVALID_INPUT | 400 | 기존(@Valid) + `@CohortRole` 경로의 `{cohortId}` 파싱 실패(인터셉터) + 그 외 경로/쿼리 파라미터 타입 불일치(`MethodArgumentTypeMismatchException`) + 깨진 JSON 본문 | 입력 오류 표시 |
+| NOT_FOUND | 404 | 신규. `NotFoundException(message)` — 자원별 한국어 문구를 인자로. 하위 리소스 소속 불일치도 404(존재 비노출). 매핑되지 않은 경로도 404 | "찾을 수 없음" 안내 페이지 (홈으로 보내지 않음) |
+| METHOD_NOT_ALLOWED | 405 | 지원하지 않는 HTTP 메서드 | 안내 |
 | CONFLICT | 409 | 신규. `ConflictException(message)` — 역할 충돌 등 | 안내 |
 | COHORT_ARCHIVED | 409 | 신규. `CohortArchivedException` — "보관된 분반은 변경할 수 없습니다. 보관을 해제한 뒤 다시 시도하세요." | 안내 (홈으로 보내지 않음). FE는 `status == ARCHIVED`면 쓰기 UI를 사전 비활성 |
 
@@ -131,7 +136,7 @@ CohortAccess resolve(User user, Long cohortId)   // 인터셉터와 응답 DTO �
   - `myRole`: 요청자의 Enrollment 역할(비소속 ADMIN만 null). `canManage`: §2 정의. 두 필드는 `@Schema(description)`으로 판정 규칙을 OpenAPI에 명시.
 - `MemberResponse {user: UserResponse, role, enrolledAt}`
 - `CohortCreateRequest {@NotBlank @Size(max=100) name, @Size(max=2000) description, List<@NotBlank String> operatorLoginIds}` / `CohortUpdateRequest {name, description}` (검증 어노테이션은 DTO 필드에만)
-- 조립: `CohortService`의 private `toResponses(List<Cohort>, User viewer)` 하나 — `enrollmentRepository.findAllByCohortIdIn(ids)` 1회로 operators/studentCount/myRole을 채우고 `CohortAuthorizer`로 canManage. 단건도 리스트 1개짜리로 같은 경로.
+- 조립: `cohort/CohortResponseAssembler.toResponses(List<Cohort>, User viewer)` 하나 — `findAllByCohortIdInWithUser(ids)` 1회로 operators/studentCount/myRole을 채우고 `CohortAuthorizer.canManage`로 canManage. 단건도 리스트 1개짜리로 같은 경로. 별도 컴포넌트인 이유: `CohortService`(생성 시 운영진 지정 → `EnrollmentService.assign`)와 `EnrollmentService`(`/api/me/cohorts` 응답)가 둘 다 쓰므로 서비스끼리 주입하면 순환이 생긴다. 자체 `@Transactional` 없음 — 호출한 서비스의 트랜잭션 안에서 돈다.
 - 생성 응답의 계약은 **본문의 `id`**. `Location` 헤더는 REST 관례상 덧붙이는 것 (CORS `exposedHeaders` 없이는 FE에서 안 읽힘 — 의존하지 않는다).
 
 ### FE 화면 계약 메모
@@ -152,10 +157,12 @@ CohortAccess resolve(User user, Long cohortId)   // 인터셉터와 응답 DTO �
 - **학생 권한은 최소.** 학생은 자기 소속 분반의 과제 관련(+ 향후 Q&A·분반 공지)만 접근하며, 다른 사람의 정보(명부·타인 제출물·타인 상태)는 어떤 API로도 노출하지 않는다. 새 API에 `@CohortRole(STUDENT)`를 달 때는 응답에 타인 정보가 섞이지 않는지 확인한다.
 - `/{role}s/{loginId}` 하위 자원은 해당 role의 Enrollment만 다룬다: 삭제 시 role 불일치 → 404, 배정 시 다른 role로 이미 소속 → 409. 역할 변경(승격)은 ADMIN 전용 #9 한 경로뿐, 강등 경로 없음. `EnrollmentService.remove(cohortId, loginId, EnrollmentRole expected)` / `assign(cohortId, loginIds, EnrollmentRole role)` 시그니처가 이를 강제한다.
 - 분반 스코프 쓰기 서비스는 첫 줄에서 `cohort.ensureActive()`(보관이면 `CohortArchivedException`). 권한 컴포넌트가 아니라 도메인 규칙.
+- 세션 쿠키는 `SameSite=Lax`, `HttpOnly` (application.yml). 다른 사이트의 `<form>` POST에 세션이 실리지 않아 CSRF 1차 방어. CSRF 토큰은 P1에서 도입하지 않는다.
 
 **계층·트랜잭션**
 - 컨트롤러 순서: 권한(어노테이션) → 검증(`@Valid`) → 서비스 호출 → **서비스가 돌려준 응답 DTO를 그대로 반환.** 컨트롤러는 엔티티를 받지 않고 DTO 변환도 하지 않는다. 이유: `open-in-view: false`라 트랜잭션(=서비스) 밖에서 LAZY를 건드리면 `LazyInitializationException`; 여러 조회를 합치는 응답은 컨트롤러가 조립할 수 없다. (기존 `AuthController`의 `UserResponse.from(user)`는 연관 없는 단일 엔티티라 예외 — 주석으로 명시.)
 - 서비스는 클래스 레벨 `@Transactional`, 조회 메서드만 `@Transactional(readOnly = true)`. 목록 조회는 fetch join으로 LAZY를 트랜잭션 안에서 끝낸다.
+- 리포지토리: 연관을 fetch join 하는 조회는 이름 끝에 `WithXxx` + 반드시 `@Query`(없으면 Spring Data가 `With`를 속성으로 파싱해 기동 실패). enum 컬럼 `order by`는 STRING 매핑이라 알파벳순 — 의도한 순서인지 주석으로 밝힌다.
 - 응답 DTO 정적 팩토리: 엔티티 하나면 `from(entity)`, 여러 값 조합이면 `of(...)`.
 - 컨트롤러 반환: 200은 DTO 직접 반환, 201은 `ResponseEntity.created(uri).body(dto)`, 204는 `void` + `@ResponseStatus(NO_CONTENT)`. 그 외 ResponseEntity 금지.
 - 상태 전이 = `POST /{id}/{동사}` 멱등. 수정 = PUT 전체 교체. 삭제 = 204, 대상 없으면 404. 목록 페이징 없음(P1), 정렬 createdAt desc (`/me/cohorts`만 status 우선).
@@ -178,19 +185,19 @@ CohortAccess resolve(User user, Long cohortId)   // 인터셉터와 응답 DTO �
 - `application.yml` 정리: jpa/jackson/session/logging은 프로필 없는 공통 문서로, `local`에는 datasource만. 테스트는 `@ActiveProfiles("test")`(→ LocalDataSeeder 미실행), datasource는 `@ServiceConnection`이 채움. `application-test.yml` 불필요.
 - `src/test/java/kr/haedal/hoj/support/` — 한 번만 만드는 파일(PM 담당, 주니어는 수정 안 함):
   - `PostgresContainerConfig` — `@TestConfiguration(proxyBeanMethods=false)` + `@Bean @ServiceConnection PostgreSQLContainer("postgres:16")`
-  - `ApiTestSupport` — 추상 베이스: `@SpringBootTest @AutoConfigureMockMvc @ActiveProfiles("test") @Import(PostgresContainerConfig.class)`, `MockMvc`, `LoginHelper`, `@AfterEach` `DatabaseCleaner.clean()`
+  - `ApiTestSupport` — 추상 베이스: `@SpringBootTest @AutoConfigureMockMvc @ActiveProfiles("test") @Import(PostgresContainerConfig.class)`, `MockMvc`, `ObjectMapper`(Jackson 3 `tools.jackson`), `LoginHelper`, 리포지토리, `@AfterEach` `DatabaseCleaner.clean()`, 그리고 여러 슬라이스가 공용으로 쓰는 픽스처 `createCohort(name, operators...)`, `enrollStudent(cohortId, loginId)`(수강생 API 나오면 API 호출로 교체), `archiveCohort`, `restoreCohort`, JSON 유틸. **슬라이스 고유 픽스처(createAssignment 등)는 그 슬라이스 테스트 클래스의 private 헬퍼로** — support/는 PM 파일
   - `DatabaseCleaner` — `TRUNCATE ... RESTART IDENTITY CASCADE`. 테스트 `@Transactional` 롤백은 채택하지 않음(요청이 테스트 트랜잭션 안에서 돌아 open-in-view=false가 드러내야 할 LAZY 문제를 가림).
   - `LoginHelper` — `MockHttpSession as(User)` : `session.setAttribute(SessionConst.LOGIN_USER_ID, user.getId())` 직접 세팅 (실제 로그인 API 호출 안 함 — 인증 교체와 무관). `admin()`, `member(loginId)`는 User 저장 후 세션 반환. 로그인 API 자체(세션 고정 방지 등)는 `AuthApiTest` 1개로 분리.
 - `HojApplicationTests` 삭제 (남기면 DB 없이 `./gradlew build`가 깨짐).
 - MockMvc(`@AutoConfigureMockMvc`, 패키지 `org.springframework.boot.webmvc.test.autoconfigure`) 채택. RestTestClient/MockMvcTester는 이 슬라이스에서 안 씀.
-- 테스트 파일은 컨트롤러와 1:1: `cohort/CohortApiTest`(#2~#7), `enrollment/EnrollmentApiTest`(#1, #8~#10), `auth/AuthApiTest`, `auth/authorization/AuthorizationMappingValidatorTest`(어노테이션 없는 컨트롤러 등록 시 컨텍스트 로드 실패).
+- 테스트 파일은 컨트롤러와 1:1: `cohort/CohortApiTest`(#2~#7), `enrollment/EnrollmentApiTest`(#1, #8~#10), `auth/AuthApiTest`, `auth/authorization/AuthorizationMappingValidatorTest`(가짜 매핑으로 규칙 a~e + 위치 우선 해석 + 위반 시 기동 중단을 단위 테스트; 실제 컨텍스트 위반은 모든 API 테스트가 기동 실패로 알려준다).
 - 케이스 (역할 × 엔드포인트 대표):
   - 미로그인 → 401 / MEMBER `POST /cohorts` → 403 / ADMIN → 201 + Location + operators 채워짐
   - 비소속 `GET /cohorts/{id}` → 403 / STUDENT → 200 myRole=STUDENT canManage=false **studentCount=null** / OPERATOR → 200 canManage=true studentCount 값 / 비소속 ADMIN → 200 myRole=null canManage=true
   - STUDENT `GET members` → 403 / OPERATOR → 200
-  - `/api/cohorts/abc` → 400 INVALID_INPUT / 없는 id: ADMIN → 404, MEMBER → 403
-  - archive → ARCHIVED, restore → ACTIVE (멱등) / 보관 후 OPERATOR GET → 200 canManage=false / 보관 후 ADMIN `PUT operators` → 409 COHORT_ARCHIVED / restore 후 → 200
-  - `PUT operators` 멱등 두 번 200 / STUDENT였던 사람 → OPERATOR 승격 / `DELETE operators` STUDENT loginId → 404, Enrollment 유지
+  - `/api/cohorts/abc` → 400 INVALID_INPUT (MEMBER·ADMIN 세션 모두, `@AdminOnly` 경로도) / 없는 id: ADMIN → 404, MEMBER → 403 / **교차 분반**: 다른 반의 STUDENT·OPERATOR가 이 반 GET·members → 403, `/me/cohorts`는 남의 소속이 섞이지 않음
+  - archive → ARCHIVED, restore → ACTIVE (멱등) / 보관 후 OPERATOR GET → 200 canManage=false / 보관 후 ADMIN `PUT operators`·`DELETE operators`·`PUT cohort` → 409 COHORT_ARCHIVED / restore 후 → 200 / PUT 수정은 재조회로 flush 확인
+  - `PUT operators` 멱등 두 번 200 / STUDENT였던 사람 → OPERATOR 승격 / `DELETE operators` STUDENT loginId → 404, Enrollment 유지 / 없는 분반 → 404 / loginId 51자 → 400 / `assign` 다른 역할 충돌 → 409(서비스 레벨, API 도달은 다음 슬라이스) / 세션은 있는데 사용자 삭제 → 401 / 깨진 JSON → 400
   - `GET /me/cohorts`: 미소속 → [] / 소속 → myRole·operators 포함 / 보관 분반은 ARCHIVED로 뒤에 정렬
   - 다음 슬라이스 필수 케이스(지금은 문서에만): 분반 A OPERATOR가 `/api/cohorts/A/assignments/{B의 과제}` → 404
 - 시더(`LocalDataSeeder`, local 전용) 확장: 샘플 분반 1개(ACTIVE, operator1 + student1~3) + 보관 분반 1개(student1 소속) → FE가 바로 붙을 수 있게. **테스트는 시더에 의존하지 않는다** — 픽스처는 각 테스트가 LoginHelper/서비스로 만든다.
@@ -199,16 +206,16 @@ CohortAccess resolve(User user, Long cohortId)   // 인터셉터와 응답 DTO �
 
 ```
 src/main/java/kr/haedal/hoj/
-├─ cohort/      Cohort, CohortStatus, CohortRepository, CohortService, CohortController
+├─ cohort/      Cohort, CohortStatus, CohortRepository, CohortService, CohortController, CohortResponseAssembler
 │               dto/ CohortCreateRequest, CohortUpdateRequest, CohortResponse
 ├─ enrollment/  Enrollment, EnrollmentRole, EnrollmentRepository, EnrollmentService, EnrollmentController
 │               dto/ MemberResponse
 ├─ user/        UserService (신규: findOrCreateMember), dto/UserResponse (auth에서 이동)
 ├─ auth/        AuthPaths (신규), StubAuthService(UserService 사용으로 수정), AuthController(@LoginOnly 부착)
-│  └─ authorization/  LoginOnly, AdminOnly, CohortRole, CohortAuthorizer(+CohortAccess), AuthorizationInterceptor, AuthorizationMappingValidator
-├─ common/error/  NotFoundException, ConflictException, CohortArchivedException, InvalidInputException (+ GlobalExceptionHandler 핸들러 4개)
+│  └─ authorization/  LoginOnly, AdminOnly, CohortRole, AuthorizationAnnotations(유효 어노테이션 해석), CohortAuthorizer, AuthorizationInterceptor, AuthorizationMappingValidator
+├─ common/error/  NotFoundException, ConflictException, CohortArchivedException, InvalidInputException (+ GlobalExceptionHandler: 위 4개 + 타입 불일치·깨진 JSON·405·미매핑 경로 핸들러)
 ├─ common/config/ WebConfig(인터셉터 등록·AuthPaths 사용), LocalDataSeeder(샘플 분반)
-src/main/resources/application.yml (공통/local 분리)
+src/main/resources/application.yml (공통/local 분리, 세션 쿠키 SameSite=Lax·HttpOnly)
 src/test/java/kr/haedal/hoj/
 ├─ support/     PostgresContainerConfig, ApiTestSupport, DatabaseCleaner, LoginHelper
 ├─ cohort/CohortApiTest, enrollment/EnrollmentApiTest, auth/AuthApiTest, auth/authorization/AuthorizationMappingValidatorTest
@@ -231,10 +238,12 @@ README.md: 스택 표 갱신, swagger 안내
 11. **404 vs 403** — 하위 리소스 소속 불일치는 404(존재 비노출). FE는 403만 홈 리다이렉트, 404는 안내 페이지. FE CLAUDE.md 규칙 3에 반영 필요. (PM 결정 2026-08-17)
 12. **관리자 목록 기본 ACTIVE**, 보관은 `?status=ARCHIVED`로 별도 섹션. (PM 결정 2026-08-17)
 13. 목록 페이징 없음. 시더 확장(local 전용).
+14. **권한 어노테이션은 위치 우선 단일 유효** — 메서드 > 클래스, 한 위치에 둘 이상 금지(기동 실패). 우리 컨트롤러는 `/api/` 아래에만(기동 검증). 종류별 OR 판정은 클래스 `@LoginOnly`가 메서드 `@AdminOnly`를 덮는 fail-open이라 기각. (구현 리뷰 2026-08-17)
+15. 세션 쿠키 `SameSite=Lax`(CSRF 1차 방어), CSRF 토큰은 P1 미도입. 학생에게 내려가는 `operators`는 `UserResponse` 전체(id·loginId·name·globalRole) — loginId가 개인정보가 되는 시점(홈페이지 연동)에 `{id, name}`으로 좁힐지 재검토.
 
 ## 9. 후속 작업
 
-- [ ] BE: `feat/cohort-slice` 브랜치에서 구현 → PR (본문에 §8 결정 사항)
-- [ ] docs: permissions.md §1·§2 보관 규칙 문구 동기화 (이 문서와 같은 커밋)
+- [x] BE: `feat/cohort-slice` 브랜치에서 구현 → PR (본문에 §8 결정 사항)
+- [x] docs: permissions.md §1·§2 보관 규칙 문구 동기화
 - [ ] FE: CLAUDE.md 규칙 3에 "404는 안내 페이지, 403만 홈" 보강 — FE 로그인/홈 슬라이스에서
 - [ ] 다음 BE 슬라이스: 수강생 배정 (`students` 엔드포인트, 이 문서 §3·§4 규약대로)
