@@ -130,11 +130,12 @@ boolean canManage(User user, Cohort cohort, EnrollmentRole myRoleOrNull) // 응�
 다음 슬라이스: `POST /api/cohorts/{cohortId}/students {loginIds: []}` (명단 붙여넣기, @CohortRole(OPERATOR)), `DELETE .../students/{loginId}`. 이미 OPERATOR인 loginId가 섞이면 → 409 CONFLICT (역할을 바꾸지 않는다).
 
 ### DTO (record)
-- `CohortResponse {id, name, description, status, createdAt, operators: [UserSummary{id, name}], studentCount: Integer|null, myRole: OPERATOR|STUDENT|null, canManage: boolean}` — 목록·단건·생성·수정 응답 **전부 이 하나**.
-  - `operators`: **이름(+id)만.** 학생이 볼 수 있는 유일한 타인 정보이므로 loginId·globalRole 은 싣지 않는다. FE: 운영진 이름은 다른 색으로 표시, 클릭하면 작은 팝업에 이름 + 직책("교육 운영진"). 직책 필드는 없음 — 이 목록의 사람은 전부 이 분반 OPERATOR 다. (PM 결정 2026-08-17)
+- `CohortResponse {id, name, description, status, createdAt, operators: [UserSummary{id, name, title}], studentCount: Integer|null, myRole: OPERATOR|STUDENT|null, myTitle, canManage: boolean}` — 목록·단건·생성·수정 응답 **전부 이 하나**.
+  - `operators`: **id·이름·직책 명칭만.** 학생이 볼 수 있는 유일한 타인 정보이므로 loginId·globalRole 은 싣지 않는다. FE: 운영진 이름은 다른 색으로 표시, 클릭하면 작은 팝업에 이름 + `title`. (PM 결정 2026-08-17)
+  - **직책 명칭(`title`, `myTitle`)은 서버의 `RoleTitle` 한 곳에서 정한 문자열**: 전역 ADMIN → **해구르르**(임원단, 고정) / 분반 OPERATOR → **교육운영진**(고정) / 그 외 → **일반 수강생**(미확정, enum 의 label 한 줄만 바꾸면 전체 반영). 판정 우선순위는 ADMIN > OPERATOR > 나머지 — 임원이 운영진으로 소속돼 있어도 해구르르. FE는 문자열을 그대로 표시하고 자체 매핑을 갖지 않는다.
   - `studentCount`: **요청자가 OPERATOR/ADMIN일 때만 값, STUDENT면 null.**
   - `myRole`: 요청자의 Enrollment 역할(비소속 ADMIN만 null). `canManage`: §2 정의. 두 필드는 `@Schema(description)`으로 판정 규칙을 OpenAPI에 명시.
-- `MemberResponse {user: UserResponse, role, enrolledAt}`
+- `MemberResponse {user: UserResponse, role, title, enrolledAt}`
 - `CohortCreateRequest {@NotBlank @Size(max=100) name, @Size(max=2000) description, List<@NotBlank String> operatorLoginIds}` / `CohortUpdateRequest {name, description}` (검증 어노테이션은 DTO 필드에만)
 - 조립: `cohort/CohortResponseAssembler.toResponses(List<Cohort>, User viewer)` 하나 — `findAllByCohortIdInWithUser(ids)` 1회로 operators/studentCount/myRole을 채우고 `CohortAuthorizer.canManage`로 canManage. 단건도 리스트 1개짜리로 같은 경로. 별도 컴포넌트인 이유: `CohortService`(생성 시 운영진 지정 → `EnrollmentService.assign`)와 `EnrollmentService`(`/api/me/cohorts` 응답)가 둘 다 쓰므로 서비스끼리 주입하면 순환이 생긴다. 자체 `@Transactional` 없음 — 호출한 서비스의 트랜잭션 안에서 돈다.
 - 생성 응답의 계약은 **본문의 `id`**. `Location` 헤더는 REST 관례상 덧붙이는 것 (CORS `exposedHeaders` 없이는 FE에서 안 읽힘 — 의존하지 않는다).
@@ -142,7 +143,7 @@ boolean canManage(User user, Cohort cohort, EnrollmentRole myRoleOrNull) // 응�
 ### FE 화면 계약 메모
 - **학생 홈**: `GET /api/me/cohorts` 결과를 status로 나눠 "현재 소속(ACTIVE)" / "지난 소속(ARCHIVED)" 두 섹션. 각 섹션은 꺾쇠로 접고 펼침, 현재 소속이 위. 펼쳤는데 비어 있으면 아무것도 표시하지 않는다(별도 미소속 안내 문구 없음).
 - **관리자 분반 관리**: `GET /api/cohorts`(기본 ACTIVE)와 `?status=ARCHIVED`로 "진행 중" / "보관" 두 섹션. 학생 홈과 같은 꺾쇠 패턴.
-- 학생 화면의 운영진 이름은 다른 색으로 표시, 클릭하면 작은 팝업에 이름 + 직책("교육 운영진"). 그 이상의 정보(loginId 등)는 API가 내려주지 않는다.
+- 학생 화면의 운영진 이름은 다른 색으로 표시, 클릭하면 작은 팝업에 이름 + 직책(`title`: 해구르르 / 교육운영진). 홈 카드의 내 배지는 `myTitle`. 그 이상의 정보(loginId 등)는 API가 내려주지 않는다.
 - 학생 화면에서 운영 기능 진입 버튼은 `canManage`로만 분기. ADMIN 전용 액션(수정·보관·운영진 지정)은 관리자 화면 소관 — `/api/auth/me`의 `globalRole`로 판단.
 
 ## 4. 정한 규약 — 이후 슬라이스가 그대로 따른다
@@ -241,7 +242,8 @@ README.md: 스택 표 갱신, swagger 안내
 13. 목록 페이징 없음. 시더 확장(local 전용).
 14. **권한 어노테이션은 위치 우선 단일 유효** — 메서드 > 클래스, 한 위치에 둘 이상 금지(기동 실패). 우리 컨트롤러는 `/api/` 아래에만(기동 검증). 종류별 OR 판정은 클래스 `@LoginOnly`가 메서드 `@AdminOnly`를 덮는 fail-open이라 기각. (구현 리뷰 2026-08-17)
 15. 세션 쿠키 `SameSite=Lax`(CSRF 1차 방어), CSRF 토큰은 P1 미도입.
-16. **학생에게 내려가는 운영진은 `UserSummary {id, name}`** — 학생이 운영진의 loginId·전역 역할을 알 필요가 없고 보안상도 그렇다(PM, 2026-08-17). FE는 이름을 다른 색으로, 클릭 시 팝업(이름 + "교육 운영진").
+16. **학생에게 내려가는 운영진은 `UserSummary {id, name, title}`** — 학생이 운영진의 loginId·전역 역할을 알 필요가 없고 보안상도 그렇다(PM, 2026-08-17). FE는 이름을 다른 색으로, 클릭 시 팝업(이름 + title).
+17. **직책 명칭은 서버 `RoleTitle` 단일 출처** — 해구르르(임원단)·교육운영진은 고정, 그 외("일반 수강생")는 미확정이라 enum label 한 줄로 변경 가능. API 는 문자열을 내려주고 FE 는 매핑을 갖지 않는다. (PM, 2026-08-17)
 
 ## 9. 후속 작업
 
