@@ -112,7 +112,7 @@ API는 이 문자열을 그대로 내려 주고, 프론트는 자체 매핑 없�
 - **setter 없음** — 상태 변경은 `update`, `archive`, `restore`, `promoteToOperator`처럼 이름 있는 메서드로만.
 - enum은 `EnumType.STRING` — 순서 번호로 저장하면 enum 순서가 바뀔 때 데이터가 깨진다.
 - 시각은 `Instant`(UTC) — KST 변환은 프론트 몫.
-- 하드 삭제 없음 — 분반은 지우지 않고 `ARCHIVED`로 보낸다.
+- 하드 삭제 없음(원칙) — 분반은 지우지 않고 `ARCHIVED`로 보낸다. *(2026-08-19 결정: ADMIN 전용 영구 삭제를 최후 수단으로 추가 예정 — 아직 미구현, docs/db/schema.md 결정 5)*
 
 `Cohort`의 도메인 메서드는 이렇다.
 
