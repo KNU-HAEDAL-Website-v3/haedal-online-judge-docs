@@ -436,7 +436,7 @@ DTO 요약.
 과제(Assignment)를 예로 들면 절차는 이렇다. 권한 코드는 한 줄도 쓰지 않는다.
 
 1. `docs/assignment/design.md`를 먼저 쓴다. 도메인마다 `docs/<domain>/` 폴더다.
-2. 엔티티 `Assignment` — `Cohort`의 규약대로. `cohort`를 `@ManyToOne(LAZY)`로 가진다.
+2. 엔티티 `Assignment` — `Cohort`의 규약대로. `cohort`를 `@ManyToOne(LAZY)`로 가진다. 파일은 `assignment/entity/`, 이후 계층도 `repository/`·`service/`·`controller/`·`dto/` 하위 패키지에 둔다.
 3. 리포지토리 — 분반 스코프 조회 `findByIdAndCohortId`를 반드시 둔다.
 4. 서비스 — 클래스 `@Transactional`, `requireXxx`, 쓰기 첫 줄 `cohort.ensureActive()`, DTO 반환.
 5. 컨트롤러 — 경로는 `/api/cohorts/{cohortId}/assignments/...` 로 **반드시 `{cohortId}` 아래에** 둔다. 메서드마다 어노테이션 하나. 학생이 보는 건 `@CohortRole(STUDENT)`, 운영진이 만드는 건 `@CohortRole(OPERATOR)`.
@@ -462,35 +462,37 @@ DTO 요약.
 
 ## 11. 파일 지도
 
+(2026-08-20 구조 세분화 반영 — 각 도메인 안을 controller/service/repository/entity/dto 하위 패키지로 나눴다. 어떤 파일이 무엇인지는 그대로다.)
+
 ```
 src/main/java/kr/haedal/hoj/
 ├─ HojApplication.java                    부팅 진입점
 ├─ user/
-│  ├─ User.java                           사람. globalRole ADMIN|MEMBER. member()/admin() 팩토리, isAdmin()
-│  ├─ GlobalRole.java                     ADMIN | MEMBER
-│  ├─ RoleTitle.java                      화면 직책 명칭 해구르르/교육운영진/일반 수강생. @JsonValue
-│  ├─ UserRepository.java                 findByLoginId
-│  ├─ UserService.java                    findOrCreateMember(loginId) — 스텁 로그인·소속 배정 공용
+│  ├─ entity/User.java                    사람. globalRole ADMIN|MEMBER. member()/admin() 팩토리, isAdmin()
+│  ├─ entity/GlobalRole.java              ADMIN | MEMBER
+│  ├─ entity/RoleTitle.java               화면 직책 명칭 해구르르/교육운영진/일반 수강생. @JsonValue
+│  ├─ repository/UserRepository.java      findByLoginId
+│  ├─ service/UserService.java            findOrCreateMember(loginId) — 스텁 로그인·소속 배정 공용
 │  └─ dto/UserResponse.java, UserSummary.java
 ├─ cohort/
-│  ├─ Cohort.java                         엔티티. create/update/archive/restore/ensureActive
-│  ├─ CohortStatus.java                   ACTIVE | ARCHIVED
-│  ├─ CohortRepository.java               findAllByStatusOrderByCreatedAtDesc
-│  ├─ CohortService.java                  findAll/findOne/create/update/archive/restore
-│  ├─ CohortResponseAssembler.java        뷰어별 CohortResponse 조립(쿼리 1번)
-│  ├─ CohortController.java               /api/cohorts
+│  ├─ entity/Cohort.java                  엔티티. create/update/archive/restore/ensureActive
+│  ├─ entity/CohortStatus.java            ACTIVE | ARCHIVED
+│  ├─ repository/CohortRepository.java    findAllByStatusOrderByCreatedAtDesc
+│  ├─ service/CohortService.java          findAll/findOne/create/update/archive/restore
+│  ├─ service/CohortResponseAssembler.java  뷰어별 CohortResponse 조립(쿼리 1번)
+│  ├─ controller/CohortController.java    /api/cohorts
 │  └─ dto/CohortCreateRequest, CohortUpdateRequest, CohortResponse
 ├─ enrollment/
-│  ├─ Enrollment.java                     소속. unique(cohort_id,user_id). promoteToOperator/isOperator
-│  ├─ EnrollmentRole.java                 OPERATOR | STUDENT. satisfies()
-│  ├─ EnrollmentRepository.java           findByCohortIdAndUserId, …WithCohort, …WithUser, …InWithUser
-│  ├─ EnrollmentService.java              findMyCohorts/findMembers/assign/promoteToOperator/remove
-│  ├─ EnrollmentController.java           /api/me/cohorts, /api/cohorts/{cohortId}/members|operators
+│  ├─ entity/Enrollment.java              소속. unique(cohort_id,user_id). promoteToOperator/isOperator
+│  ├─ entity/EnrollmentRole.java          OPERATOR | STUDENT. satisfies()
+│  ├─ repository/EnrollmentRepository.java  findByCohortIdAndUserId, …WithCohort, …WithUser, …InWithUser
+│  ├─ service/EnrollmentService.java      findMyCohorts/findMembers/assign/promoteToOperator/remove
+│  ├─ controller/EnrollmentController.java  /api/me/cohorts, /api/cohorts/{cohortId}/members|operators
 │  └─ dto/MemberResponse.java
-├─ auth/
-│  ├─ AuthService.java                    인터페이스 — 실제 인증으로 교체할 지점
-│  ├─ StubAuthService.java                지금의 구현(검증 없음)
-│  ├─ AuthController.java                 login/logout/me
+├─ auth/                                  ※ 공통 기반이라 계층 폴더는 controller/service만. 나머지는 루트 유지
+│  ├─ service/AuthService.java            인터페이스 — 실제 인증으로 교체할 지점
+│  ├─ service/StubAuthService.java        지금의 구현(검증 없음)
+│  ├─ controller/AuthController.java      login/logout/me
 │  ├─ AuthInterceptor.java                ① 로그인 여부
 │  ├─ AuthPaths.java                      공개 경로 목록(단일 출처)
 │  ├─ SessionConst.java                   세션 키
